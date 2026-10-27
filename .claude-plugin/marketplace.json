@@ -1,0 +1,14 @@
+{
+  "name": "talenscape",
+  "owner": {
+    "name": "Talenscape"
+  },
+  "description": "Talenscape: token-saving tools for AI coding sessions.",
+  "plugins": [
+    {
+      "name": "talenscape",
+      "source": "./plugin",
+      "description": "Cuts AI token use: project map, ~400-token session start, trimmed output, big-file outlines."
+    }
+  ]
+}
