@@ -3,12 +3,12 @@
   "owner": {
     "name": "Talenscape"
   },
-  "description": "Talenscape: token-saving tools for AI coding sessions.",
+  "description": "Talenscape: 45× fewer tokens on code questions in AI coding sessions.",
   "plugins": [
     {
       "name": "talenscape",
       "source": "./plugin",
-      "description": "Cuts AI token use: project map, ~400-token session start, trimmed output, big-file outlines."
+      "description": "45× fewer tokens on code questions. Talenscape gives your AI a ~400-token summary at the start of each chat and a map of your project, so it reads a few lines instead of whole files."
     }
   ]
 }

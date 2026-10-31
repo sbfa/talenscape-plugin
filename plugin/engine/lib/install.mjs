@@ -9,12 +9,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { frontDoor } from './frontdoor.mjs';
 
 const PLUGIN = fileURLToPath(new URL('../../', import.meta.url));
 const HOOKS = {
   SessionStart: { command: '"$CLAUDE_PROJECT_DIR"/.talenscape/plugin/hooks/start.sh', timeout: 120 },
-  PreToolUse: { matcher: 'Read|Bash|Write|Edit|MultiEdit|NotebookEdit', command: 'node --no-warnings "$CLAUDE_PROJECT_DIR"/.talenscape/plugin/engine/steer.mjs', timeout: 30 },
+  PreToolUse: { matcher: 'Read|Bash|Grep|Write|Edit|MultiEdit|NotebookEdit', command: 'node --no-warnings "$CLAUDE_PROJECT_DIR"/.talenscape/plugin/engine/steer.mjs', timeout: 30 },
   UserPromptSubmit: { command: 'node --no-warnings "$CLAUDE_PROJECT_DIR"/.talenscape/plugin/engine/peek.mjs', timeout: 15 },
+  PostToolUse: [
+    { matcher: 'mcp__.*', command: 'node --no-warnings "$CLAUDE_PROJECT_DIR"/.talenscape/plugin/engine/after.mjs', timeout: 15 },
+    { command: 'node --no-warnings "$CLAUDE_PROJECT_DIR"/.talenscape/plugin/engine/lib/pulse.mjs', timeout: 5 }, // the city's live traffic
+  ],
 };
 const CLAUDE_LINES = 'Session context arrives as a `[blink]` block at start (owner rules, decisions, where we left off).\nNo block? Run `city blink` (or `node .talenscape/plugin/engine/cli.mjs blink`) and follow it. Lookups and wrap-up: skill `talenscape`.\n';
 
@@ -36,12 +41,15 @@ export function install(target) {
   settings.hooks ??= {};
   for (const [event, h] of Object.entries(HOOKS)) {
     const list = (settings.hooks[event] ?? []).filter((g) => !(g.hooks ?? []).some((x) => String(x.command).includes('.talenscape/plugin/')));
-    list.push({ ...(h.matcher ? { matcher: h.matcher } : {}), hooks: [{ type: 'command', command: h.command, timeout: h.timeout }] });
+    for (const one of [h].flat()) list.push({ ...(one.matcher ? { matcher: one.matcher } : {}), hooks: [{ type: 'command', command: one.command, timeout: one.timeout }] });
     settings.hooks[event] = list;
   }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
   done.push('.claude/settings.json');
+  // The same hooks at the folder holding the owner's projects, for chats opened there (lib/frontdoor.mjs).
+  const door = frontDoor(root, { plugin: path.join(root, '.talenscape', 'plugin') });
+  if (door.written && !door.unchanged) done.push(door.written);
   // 3. The skills (talenscape, game-3d…), where Claude Code finds project skills.
   for (const name of fs.readdirSync(path.join(PLUGIN, 'skills'))) {
     const from = path.join(PLUGIN, 'skills', name, 'SKILL.md');

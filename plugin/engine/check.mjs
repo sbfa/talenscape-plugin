@@ -25,7 +25,7 @@ export async function check(root, { bench = true } = {}) {
     parts.push('no tests found');
   }
   if (bench && fs.existsSync(path.join(root, 'bench', 'scoreboard.mjs'))) {
-    const r = run(root, 'node --no-warnings bench/scoreboard.mjs', 40);
+    const r = run(root, 'node --no-warnings bench/scoreboard.mjs --check', 40);
     parts.push(r.code === 0 ? 'scoreboard ok' : 'scoreboard FAIL (city run --log for details)');
     ready &&= r.code === 0;
   }

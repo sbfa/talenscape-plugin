@@ -24,7 +24,7 @@ import { listCheckpoints } from './guard.mjs';
 import { parseAttempt, parseQuestion, questionsOf, freshness, gitContext, symbolsChanged, skillsDelta, compress, attemptLine, clip, STALE_HOURS } from './lib/manifest.mjs';
 
 // Notes and generated results: never counted as unsaved or changed work.
-const STATE_FILES = new Set(['.city/state.json', '.city/BLINK.md', '.city/MAP.md', '.city/GRAPH.md', '.city/FORMATS.md', '.city/layout.json', '.city/design.json', '.city/facts.md', 'HANDOFF.md', '.city/HANDOFF.md', 'bench/RESULTS.md']);
+const STATE_FILES = new Set(['.city/state.json', '.city/BLINK.md', '.city/MAP.md', '.city/GRAPH.md', '.city/NOTES.md', '.city/FORMATS.md', '.city/layout.json', '.city/design.json', '.city/facts.md', 'HANDOFF.md', '.city/HANDOFF.md', 'bench/RESULTS.md']);
 const BUDGET = 400;
 const MAX_TRAPS = 3; // older lessons move to facts (city note --fact) so the summary stays small
 
@@ -66,7 +66,7 @@ function changesSince(root, since) {
     const [head, ...files] = block.trim().split('\n').filter(Boolean);
     const [hash, author, subject = ''] = head.split('\t');
     // Notes, the shared context, and updates of Talenscape itself (in another project) are not work.
-    const real = files.filter((f) => !STATE_FILES.has(f) && !/^\.city\/(snips|map|names)\//.test(f) && !f.startsWith('.talenscape/') && !f.startsWith('.claude/skills/talenscape/'));
+    const real = files.filter((f) => !STATE_FILES.has(f) && !/^\.city\/(snips|map|names|catalog)\//.test(f) && !f.startsWith('.talenscape/') && !f.startsWith('.claude/skills/talenscape/'));
     if (real.length) commits.push({ hash, author, subject, files: real });
   }
   return { commits, files: [...new Set(commits.flatMap((c) => c.files))] };
@@ -115,6 +115,8 @@ export async function blink(root = process.cwd(), budget = BUDGET, { nextSession
   const questions = questionsOf(st);
   const attempts = (st.attempts ?? []).filter((a) => a.approach);
   const m = await mapSummary(root, 5);
+  // The owner's other projects: asked about once, then added and kept fresh by themselves (lib/catalog.mjs).
+  const cat = shared || nextSession || json ? {} : await (await import('./lib/catalog.mjs')).autoCatalog(root, { background: true }).catch(() => ({})); // never waits for a build
   const skillNames = m.skills?.map((k) => k.name) ?? [];
   const delta = st.skillsAt ? skillsDelta(st.skillsAt, skillNames) : '';
   const env = st.env && Object.keys(st.env).length ? st.env : null;
@@ -160,12 +162,12 @@ export async function blink(root = process.cwd(), budget = BUDGET, { nextSession
     st.owner?.length && { key: 'owner', kind: 'rule', text: `OWNER: ${join(st.owner)}` },
     st.rules?.length && { key: 'rules', kind: 'rule', text: `RULES: ${join(st.rules)}` },
     env && { key: 'env', kind: 'rule', text: `ENV: ${Object.entries(env).map(([k, v]) => `${k} ${v}`).join(' · ')}` },
-    decisions.length && { key: 'decided', kind: 'done', text: `DECIDED: ${join(decisions)}`, short: `DECIDED: ${join(decisions.slice(-3).reverse())}${decisions.length > 3 ? ` +${decisions.length - 3} older (city decisions)` : ''}` }, // the newest, which are the ones still unfamiliar
+    decisions.length && { key: 'decided', kind: 'done', text: `DECIDED: ${join(decisions)}`, short: `DECIDED: ${join(decisions.slice(-3).reverse().map((d) => clip(d, 60)))}${decisions.length > 3 ? ` +${decisions.length - 3} older (city decisions)` : ''}` }, // the newest, which are the ones still unfamiliar
     st.design?.length && { key: 'design', kind: 'extra', drop: 4, text: `DESIGN (read city decisions first): ${st.design.map((d) => d.split(':')[0]).join(', ')}` },
     !st.goal && !st.next && { key: 'new', kind: 'frame', text: ownNotes(root)
       ? `NEW TO TALENSCAPE: this project keeps its own notes in ${ownNotes(root)}. Read it once, then put the key points in the summary with city wrapup --goal … --next … --decide … --owner … (its own file is never overwritten), so later sessions start here instead`
       : 'NEW PROJECT: record it with city wrapup --goal … --next … [--owner … --rule …]' },
-    (st.goal || st.last || st.next) && { key: 'now', kind: 'progress', text: `NOW: ${join(nowParts, ' | ')}`, short: `NOW: ${join([st.last && clip(nowParts[1], 90), st.next && 'next ' + clip(st.next, 110)], ' | ')}` },
+    (st.goal || st.last || st.next) && { key: 'now', kind: 'progress', text: `NOW: ${join(nowParts, ' | ')}`, short: `NOW: ${join([st.last && clip(nowParts[1], 80), st.next && 'next ' + clip(st.next, 90)], ' | ')}` },
     st.blockers?.length && { key: 'blocked', kind: 'blocker', text: `BLOCKED: ${st.blockers.map((b, i) => `${i + 1}) ${b}`).join(' ')}`, short: `BLOCKED: ${st.blockers.map((b, i) => `${i + 1}) ${clip(b, 50)}`).join(' ')}` },
     questions.length && { key: 'ask owner', kind: 'operator', text: `ASK OWNER (wait for the answer${questions.some((q) => q.blocks?.length) ? '; held until then: ' + questions.flatMap((q) => q.blocks ?? []).join(', ') : ''}): ${questions.map((q, i) => `${i + 1}) ${q.question}${q.options ? ` [${q.options.join('/')}]` : ''}`).join(' ')}`, short: `ASK OWNER (wait for the answer${questions.some((q) => q.blocks?.length) ? '; held: ' + questions.flatMap((q) => q.blocks ?? []).join(', ') : ''}): ${questions.map((q, i) => `${i + 1}) ${clip(q.question, 60)}`).join(' ')}` },
     ...attempts.map((a, i) => ({ key: `tried ${i + 1}`, kind: a.superseded ? 'superseded' : 'progress', text: `TRIED (don't repeat): ${attemptLine(a)}`, short: `TRIED: ${attemptLine(a, true)}` })),
@@ -185,6 +187,13 @@ export async function blink(root = process.cwd(), budget = BUDGET, { nextSession
       ? { key: 'city', kind: 'extra', drop: 7, text: `CITY: project key ok, checked in as ${sy.project} (city sync; the key is TALENSCAPE_KEY, never print it)`, short: `CITY: checked in as ${sy.project}` }
       : { key: 'city', kind: 'progress', text: `CITY: project key check-in failed: ${sy.error} (city sync to retry; make a new key in the app if it was switched off)` });
   }
+  // Skills the owner wrote in the app, in their own words: the AI each is for writes it up properly.
+  {
+    const { draftsToWrite } = await import('./lib/sync.mjs');
+    const drafts = draftsToWrite(root);
+    const who = (m) => ({ claude: 'Claude', grok: 'Grok', gemini: 'Gemini', chatgpt: 'ChatGPT', muse: 'Muse' })[m] ?? 'any AI';
+    if (drafts.length) entries.push({ key: 'write up', kind: 'progress', text: `WRITE UP (named AI only, AGENTS.md step 7): ${drafts.map((d) => `${d.name} → ${who(d.model)}, ${d.file.replace(/\/SKILL\.md$/, '')}`).join(' · ')}` });
+  }
   // The library in the hub: notes the AIs or the owner left since the last wrap-up (committed or not).
   if (!nextSession) {
     const fresh = new Set([...(ch?.files ?? []), ...unsavedFiles].filter((f) => /^shared\/notes\/[^/]+\.md$/.test(f)));
@@ -195,6 +204,10 @@ export async function blink(root = process.cwd(), budget = BUDGET, { nextSession
     }
   }
   // A project new to Talenscape (never wrapped up): Claude greets the owner with what it is, once.
+  // Choices and one-time steps for the owner live on the city's Setup card, never as questions in chat.
+  const setup = shared || nextSession || json ? { done: true } : await (await import('./lib/setup.mjs')).setupStatus(root, { quick: true });
+  if (!setup.done) { const left = setup.items.filter((i) => !i.done).length; entries.push({ key: 'setup', kind: 'progress', text: `SETUP: the owner's choices${left ? ` and ${left} one-time step(s)` : ''} are on the city's Setup card (city view). Mention it once if it fits; don't ask them in chat.`, short: 'SETUP: waiting on the city\'s Setup card' }); }
+  if (cat.added?.length) entries.push({ key: 'catalog', kind: 'progress', text: `CATALOG: added ${cat.added.join(', ')} (catalog rebuilt)`, short: `CATALOG: added ${cat.added.length} project(s)` });
   if (!st.wrappedAt && !shared && !nextSession) entries.push({ key: 'welcome', kind: 'progress', text: 'WELCOME: Talenscape is new in this project. Tell the owner in a few lines: sessions now start where they left off, code answers come in a few lines (fewer tokens), `city view` opens the project as a 3D city on their computer (with a free City key from talenscape.com/city), and talenscape.com has the features. Then carry on.', short: 'WELCOME: new to Talenscape: tell the owner what it does, `city view`, talenscape.com' });
   // The skill budget: when Claude's list of skills is filling the room Claude Code gives it.
   try { const line = (await import('./lib/budget.mjs')).budgetLine(root); if (line) entries.push({ key: 'skills', kind: 'progress', text: line, short: line.split('. ')[0] + '.' }); } catch { /* optional */ }
@@ -216,7 +229,11 @@ export async function blink(root = process.cwd(), budget = BUDGET, { nextSession
   if (st.traps?.length) entries.push({ key: 'traps', kind: 'blocker', text: `TRAPS: ${join(st.traps)}`, short: `TRAPS: ${join(st.traps.map((t) => clip(t, 55)))}` }); // clipped when tight, never dropped
   const saved = savingsLine(readSavings(root).last);
   if (saved) entries.push({ key: 'saved', kind: 'extra', drop: 9, text: saved });
-  entries.push({ key: 'lookup', kind: 'frame', text: 'LOOKUP: city ask|deps|uses|impact|connect|snip … not file reads · skill talenscape' });
+  // Other AIs read files and can't run city: their way in is the catalog (when there is one) and their notes list.
+  const hasCatalog = shared && fs.existsSync(path.join(root, '.city', 'catalog', 'COMPANY.md'));
+  entries.push({ key: 'lookup', kind: 'frame', text: hasCatalog
+    ? 'LOOKUP: other projects: .city/catalog/COMPANY.md → card → sections · your notes: .city/NOTES.md'
+    : 'LOOKUP: city ask|deps|uses|impact|connect|snip … not file reads · skill talenscape' });
   entries.push({ key: 'end', kind: 'frame', text: 'END: city check, then city wrapup --last … --next … --touch <file>' });
   // Aim 5% under: the count here is an estimate, and the real tokenizer can come out a little higher.
   const out = compress(entries.filter(Boolean), Math.floor(budget * 0.95), tokens);
@@ -431,14 +448,17 @@ async function writeMapFiles(root) {
     if (fs.existsSync(ndir)) for (const f of fs.readdirSync(ndir)) if (!names.has(`.city/names/${f}`)) fs.rmSync(path.join(ndir, f));
     for (const [f, t] of names) { fs.mkdirSync(ndir, { recursive: true }); fs.writeFileSync(path.join(root, f), t); }
     fs.writeFileSync(path.join(root, '.city', 'GRAPH.md'), await m.graphFile(root));
+    const cat = await import('./lib/catalog.mjs');
+    if (cat.readProjects(root).length) await cat.build(root); // every project in one place, fresh from their files
+    if (fs.existsSync(path.join(root, 'shared', 'notes'))) fs.writeFileSync(path.join(root, '.city', 'NOTES.md'), (await import('./lib/notes.mjs')).notesFile(root)); // who reads which note
     fs.copyFileSync(new URL('../templates/FORMATS.md', import.meta.url), path.join(root, '.city', 'FORMATS.md')); // how to make skills and plugins that work
     await m.writeSnips(root);
   } catch { /* the map files are optional */ }
 }
 
-// The context other AIs read (.city/BLINK.md, MAP.md and GRAPH.md), brought up to date. With commit:
+// The context other AIs read (.city/BLINK.md, MAP.md, GRAPH.md and NOTES.md), brought up to date. With commit:
 // saved as its own commit (only those files), only when the project already shares them.
-export const CONTEXT_FILES = ['.city/BLINK.md', '.city/MAP.md', '.city/FORMATS.md', '.city/map', '.city/names', '.city/GRAPH.md', '.city/snips'];
+export const CONTEXT_FILES = ['.city/BLINK.md', '.city/MAP.md', '.city/NOTES.md', '.city/FORMATS.md', '.city/map', '.city/names', '.city/GRAPH.md', '.city/snips', '.city/catalog'];
 export async function publishContext(root, { commit = false } = {}) {
   if (commit && !git(root, 'ls-files', '--', '.city/BLINK.md')) return 'not shared';
   await writeMapFiles(root); // first, so the summary doesn't count them as unsaved work
@@ -454,6 +474,14 @@ export async function publishContext(root, { commit = false } = {}) {
   return changed ? 'committed' : 'up to date';
 }
 
+// The summary's lines that are new or changed since the one given before ('' when nothing changed). The
+// first line names the commit, so it only counts when something else changed too.
+export function sinceLast(before, now) {
+  const had = new Set(before.split('\n')), [, ...rest] = now.split('\n');
+  const changed = rest.filter((l) => l.trim() && !had.has(l));
+  return changed.length ? ['[blink] since the last summary in this chat:', ...changed].join('\n') : '';
+}
+
 export async function main([cmd, ...rest]) {
   if (cmd === 'context' && rest.includes('--push-ai')) { console.log(`AI copy sent to: ${(await import('./lib/aicopy.mjs')).pushAiCopy(process.cwd()).join(', ') || 'nowhere'}`); return; }
   if (cmd === 'context') { console.log(`context for other AIs: ${await publishContext(process.cwd(), { commit: rest.includes('--commit') })}`); return; }
@@ -465,8 +493,18 @@ export async function main([cmd, ...rest]) {
       process.exitCode = r.over ? 1 : 0;
       return;
     }
-    rotateSavings(process.cwd()); // a new session starts: this session's savings become "last session"
-    console.log(await blink(process.cwd()));
+    // Resuming the same chat: the AI still has the last summary, so only the lines that changed are shown (or nothing).
+    const source = (() => { try { return JSON.parse(process.env.TALENSCAPE_HOOK_INPUT || '{}').source ?? ''; } catch { return ''; } })();
+    if (source !== 'resume') rotateSavings(process.cwd()); // a new session starts: this session's savings become "last session"
+    // AIs without a start step of their own (Grok, Gemini, …) check in here, so they get what the
+    // owner added in the app too. Claude's start step has just done it, so it isn't done twice.
+    const { syncStatus, main: syncMain } = await import('./lib/sync.mjs');
+    const lastSync = Date.parse(syncStatus(process.cwd())?.at ?? '') || 0;
+    if (!process.env.TALENSCAPE_NO_SYNC && Date.now() - lastSync > 5 * 60_000) await syncMain(['--quiet']).catch(() => {});
+    const text = await blink(process.cwd()), last = path.join(process.cwd(), '.city', 'lastblink.txt');
+    const shown = source === 'resume' ? sinceLast(fs.existsSync(last) ? fs.readFileSync(last, 'utf8') : '', text) : text;
+    if (shown) console.log(shown);
+    try { fs.writeFileSync(last, text); } catch { /* no .city folder: nothing to compare next time */ }
     const version = (() => { try { return JSON.parse(fs.readFileSync(new URL('../.claude-plugin/plugin.json', import.meta.url), 'utf8')).version; } catch { return ''; } })();
     await (await import('./lib/ping.mjs')).weeklyPing({ version }); // installed plugins only; city ping off stops it
   } else if (cmd === 'note') {

@@ -13,7 +13,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Read|Bash|Write|Edit|MultiEdit|NotebookEdit",
+        "matcher": "Read|Bash|Grep|Write|Edit|MultiEdit|NotebookEdit",
         "hooks": [
           {
             "type": "command",
@@ -30,6 +30,27 @@
             "type": "command",
             "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}\"/engine/peek.mjs",
             "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}\"/engine/after.mjs",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}\"/engine/lib/pulse.mjs",
+            "timeout": 5
           }
         ]
       }

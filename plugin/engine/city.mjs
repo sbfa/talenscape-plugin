@@ -43,6 +43,11 @@ export async function main(argv) {
   const [cmd, ...rest] = argv;
   const root = process.cwd();
   const budget = takeFlag(rest, '--budget');
+  // Questions about the code first bring the map up to date (only changed files are re-read, about a
+  // quarter of a second), so an answer never points at code that moved or no longer exists.
+  if (['ask', 'where', 'deps', 'uses', 'impact', 'connect', 'snip', 'search'].includes(cmd)) {
+    try { await buildIndex(root); } catch { /* answer from the map as it is */ }
+  }
   switch (cmd) {
     case 'index': {
       const s = await buildIndex(path.resolve(rest[0] ?? root));

@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 const KEEP = 30;
-const DEEP_DIVE_MINUTES = 15;
+const NOTE_MINUTES = 15; // the full note at most this often; a short line in between
 
 function git(root, args, env = {}) {
   return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } }).trimEnd();
@@ -99,12 +99,20 @@ const IRREVERSIBLE = [
   [/\bdeploy\/cloudflare\.mjs\s+(lock|site|domain|db|passkeys\s+--reset)\b/, 'changes the live Cloudflare site, login lock or online data'],
 ];
 
+// sed -i over a pattern of files (*.js, $(…), `…`). Only the file names count: quoted text is sed's own
+// search-and-replace (a * there is part of a pattern), and other commands in the same line are not
+// sed's files.
+const SED_MANY = {
+  test: (cmd) => /\bfind\b.*-exec\s+sed\s+-i/.test(cmd) || cmd.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, "''")
+    .split(/\n|&&|\|\||;|\|/).some((step) => /\bsed\s+-i\b.*(\*|\$\(|`)/.test(step)),
+};
+
 // Actions that can destroy work in the project: snapshot first, then look closely.
 const RISKY = [
   [/\brm\s+(-\w*[rRf]\w*\s+)+|\brm\s+.*[*?]/, 'deletes files'],
   [/\bgit\s+(reset\s+--hard|clean\s+-\w*f|checkout\s+(--\s+)?\.|restore\s+(\S+\s+)*\.|rebase\b|commit\s+--amend|branch\s+-D|stash\s+(drop|clear)|filter-branch|filter-repo)/, 'changes or discards saved history or unsaved work'],
   [/\bfind\b.*\s-delete\b|\bxargs\b.*\brm\b/, 'deletes many files'],
-  [/\bsed\s+-i\b.*(\*|\$\(|`)|\bfind\b.*-exec\s+sed\s+-i/, 'edits many files at once'],
+  [SED_MANY, 'edits many files at once'],
   [/\b(chmod|chown)\s+-R\b|\bdd\s+if=|\bmkfs\b|\btruncate\s+-s/, 'changes permissions or wipes data'],
   [/\b(drop\s+(table|database)|truncate\s+table|delete\s+from)\b/i, 'deletes database data'],
 ];
@@ -160,18 +168,14 @@ export async function classify(root, input) {
 
 // ---------- deep-dive mode: while active, savings step aside ----------
 
-const deepFile = (root) => path.join(root, '.city', 'deepdive.json');
-
-export function startDeepDive(root, reason) {
-  fs.mkdirSync(path.dirname(deepFile(root)), { recursive: true });
-  fs.writeFileSync(deepFile(root), JSON.stringify({ until: Date.now() + DEEP_DIVE_MINUTES * 60_000, reason }));
-}
-
-export function deepDive(root) {
-  try {
-    const d = JSON.parse(fs.readFileSync(deepFile(root), 'utf8'));
-    return d.until > Date.now() ? d : null;
-  } catch { return null; }
+// When the full note was last given, so the same paragraph isn't repeated at every risky step.
+const noteFile = (root) => path.join(root, '.city', 'guard-note.json');
+function fullNoteDue(root) {
+  let last = 0;
+  try { last = JSON.parse(fs.readFileSync(noteFile(root), 'utf8')).at ?? 0; } catch { /* never given */ }
+  if (Date.now() - last < NOTE_MINUTES * 60_000) return false;
+  try { fs.mkdirSync(path.dirname(noteFile(root)), { recursive: true }); fs.writeFileSync(noteFile(root), JSON.stringify({ at: Date.now() })); } catch { /* read-only: say it each time */ }
+  return true;
 }
 
 // Called by the safety-net hook before every action. Returns null, or what the hook should say.
@@ -190,13 +194,9 @@ export async function guard(root, input) {
   if (c.level === 'risky') {
     let cp = null;
     try { cp = checkpoint(root, c.reason); } catch { /* still warn */ }
-    startDeepDive(root, c.reason);
-    return {
-      context: `Talenscape failsafe: this ${c.reason}. ` +
-        (cp ? `Snapshot #${cp.id} taken (undo: city rollback ${cp.id}). ` : 'No snapshot possible (not a git project). ') +
-        `Deep-dive mode for ${DEEP_DIVE_MINUTES} min: full reads and full output, no trimming. Check what depends on it ` +
-        '(city impact <name>), read the affected code fully, run the full tests afterwards, and city check before calling it done.',
-    };
+    const snap = cp ? `Snapshot #${cp.id} (undo: city rollback ${cp.id}).` : 'No snapshot possible (not a git project).';
+    // The snapshot every time; the reminder to check what depends on it once per NOTE_MINUTES. Savings stay on.
+    return { context: fullNoteDue(root) ? `Talenscape failsafe: this ${c.reason}. ${snap} Check what depends on it first (city impact <name>).` : `Talenscape failsafe: ${snap}` };
   }
   return null;
 }

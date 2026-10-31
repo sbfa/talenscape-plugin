@@ -20,7 +20,10 @@ import). It holds only the summary, the map and the shared files: no code, no im
 3. Then \`MAP.md\` and \`map/<area>.md\`: every file of the project, its pieces and their lines.
    \`GRAPH.md\`: what calls what. \`facts.md\`: more background.
 4. \`shared/\`: each AI's list of skills, tools and plugins (yours is \`shared/<you>.md\`) and the
-   library of notes, \`shared/notes/\`.
+   library of notes, \`shared/notes/\`: \`NOTES.md\` lists the ones for you, each with its corrections.
+   A question about another of the owner's projects: an exact word (a price, ID, address)? Search for it
+   first. Vague? \`catalog/COMPANY.md\` (every project in one place, read once per chat), then that
+   project's card, \`catalog/<project>.md\` (its key files).
 5. Only the owner or Claude Code changes the project. You can't save here: hand anything to keep
    (your list, a note, a change) to the owner as text in your reply, and they pass it on.
 
@@ -40,12 +43,13 @@ function filesOf(root) {
   const read = (f) => fs.readFileSync(path.join(root, f), 'utf8');
   const have = (f) => fs.existsSync(path.join(root, f));
   out.set('README.md', README(path.basename(root)));
-  for (const f of ['BLINK.md', 'MAP.md', 'GRAPH.md', 'FORMATS.md', 'facts.md']) if (have(`.city/${f}`)) out.set(f, plain(read(`.city/${f}`)));
+  for (const f of ['BLINK.md', 'MAP.md', 'GRAPH.md', 'NOTES.md', 'FORMATS.md', 'facts.md']) if (have(`.city/${f}`)) out.set(f, plain(read(`.city/${f}`)));
   // The map's how-to names the code pieces, which this copy leaves out.
   if (out.has('MAP.md')) out.set('MAP.md', out.get('MAP.md').replace(/^(# .*\n\n)[\s\S]*?\n(?=## )/, '$1'
     + 'Start with `BLINK.md` (where things stand). Then pick the area below and open its map: every file\n'
     + 'there, its pieces and their lines. What calls what: `GRAPH.md`. This copy has no code itself.\n\n'));
   if (have('.city/map')) for (const f of fs.readdirSync(path.join(root, '.city/map'))) out.set(`map/${f}`, plain(read(`.city/map/${f}`)).replace(/ A piece's own file: [^\n]*/, ''));
+  if (have('.city/catalog')) for (const f of fs.readdirSync(path.join(root, '.city/catalog'), { recursive: true }).filter((x) => x.endsWith('.md'))) out.set(`catalog/${f.split(path.sep).join('/')}`, read(`.city/catalog/${f}`)); // with the big files' sections
   // Shared files as committed (the copy never carries unsaved work).
   for (const f of git(root, ['ls-files', '--', 'shared']).split('\n').filter((f) => f.endsWith('.md'))) out.set(f, read(f));
   return out;
@@ -78,6 +82,10 @@ export function buildAiCopy(root) {
 // A repo that isn't there just fails, quietly. Returns where it went.
 export function pushAiCopy(root) {
   const sent = [];
+  // Only from main: a push from a test or side branch would put that branch's notes in the copy.
+  let branch = '';
+  try { branch = git(root, ['rev-parse', '--abbrev-ref', 'HEAD']); } catch { /* not a repository */ }
+  if (branch !== 'main' && branch !== 'master') return sent;
   // Replace the copy only while it holds nothing but our own copies: if someone else saved there,
   // leave it and say so (their file would be lost), until it's moved into the project.
   const ours = (to, branch) => {

@@ -25,6 +25,8 @@ Talenscape never calls an AI service. The free token saver sends only the weekly
   the summary, the map and `shared/` (no code). Only if that repo exists, and only to your own GitHub.
 - **The online city (optional):** only if you set up a project key yourself. It sends skill names,
   AI lists, notes and a searchable index of your code to the Talenscape app. Leave it off and nothing goes.
+  With it, `city view` shows your online city and keeps a live line to it: the line carries only short
+  "something changed" notes, never skill text or keys.
 
 ## How it protects you
 

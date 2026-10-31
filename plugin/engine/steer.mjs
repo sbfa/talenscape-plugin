@@ -3,7 +3,11 @@
 // - Read: a full read of a big file first gets a short outline (what is on which lines), so the
 //   AI reads just the part it needs.
 // - Bash: a command known to print a lot (tests, installs, builds, long git logs) is rewritten to
-//   run through the trimmer, which returns only what matters (full log saved).
+//   run through the trimmer, which returns only what matters (full log saved). Any other command's
+//   output is capped: unchanged when short, start + errors + end when long (full log saved).
+// - Search (grep, rg, git grep, or the Grep tool) reaching into the owner's other projects: answered
+//   with the company catalog's best lines (`city catalog find`), which measured ~38% fewer tokens on
+//   fresh questions than plain search; asked again, the search runs as typed.
 // Repeating a big read is allowed, so nothing is ever blocked for good. Small files, partial
 // reads, files outside the project and quiet or piped commands pass straight through.
 
@@ -11,8 +15,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { addSaving } from './lib/savings.mjs';
-import { guard, deepDive } from './guard.mjs';
+import { guard } from './guard.mjs';
 import { fromHook } from './lib/tools.mjs';
+import { sizeCheck } from './lib/fresh.mjs';
+import * as catalog from './lib/catalog.mjs';
 
 export const BIG_LINES = 250;
 export const BIG_BYTES = 12_000;
@@ -83,11 +89,18 @@ function secondTry(root, key) {
 // running it, { updatedInput } runs a rewritten call, { ask } needs the owner's confirmation,
 // { context } lets it run with a note to the AI.
 export async function steer(root, input, { record = true } = {}) {
-  // Safety first: risky actions get a snapshot and a deep dive; can't-be-undone ones go to the owner.
+  // Safety first: risky actions get a snapshot; can't-be-undone ones go to the owner.
   const safety = await guard(root, input).catch(() => null);
   if (safety) return safety;
-  if (deepDive(root)) return null; // during a deep dive, nothing is trimmed or outlined
-  if (input?.tool_name === 'Bash') return steerBash(root, input.tool_input ?? {});
+  if (input?.tool_name === 'Grep') return steerSearch(root, input.tool_input?.pattern, [input.tool_input?.path ?? root], `grep:${JSON.stringify(input.tool_input)}`);
+  if (input?.tool_name === 'Bash') {
+    const search = searchOf(input.tool_input?.command ?? '');
+    if (search) {
+      const answer = steerSearch(root, search.pattern, search.paths, `bash:${input.tool_input.command}`);
+      if (answer) return answer;
+    }
+    return steerBash(root, input.tool_input ?? {});
+  }
   if (input?.tool_name !== 'Read') return null;
   const ti = input.tool_input ?? {};
   if (!ti.file_path || ti.offset !== undefined || ti.limit !== undefined || PASS_THROUGH.test(ti.file_path)) return null;
@@ -111,6 +124,48 @@ export async function steer(root, input, { record = true } = {}) {
     `\nIf you truly need all of it, repeat the same Read and it will be allowed.`;
   if (record) addSaving(root, 'outlines', tokens(text), tokens(message));
   return message;
+}
+
+// A plain search command, as words: grep -r / rg / git grep with its pattern and paths. Only a single
+// command (an optional `| head` after it is fine); anything more involved is left alone.
+export function searchOf(command) {
+  const first = command.split(/\|\s*head\b/)[0];
+  if (/[;&|<>`$(]/.test(first)) return null;
+  const words = first.match(/'[^']*'|"[^"]*"|\S+/g)?.map((w) => w.replace(/^(['"])(.*)\1$/, '$2')) ?? [];
+  let i = 0;
+  if (words[0] === 'git' && words[1] === 'grep') i = 2;
+  else if (words[0] === 'grep' || words[0] === 'rg' || words[0] === 'egrep') i = 1;
+  else return null;
+  const VALUED = new Set(['-A', '-B', '-C', '-m', '--max-count', '-g', '--glob', '-t', '--type', '--include', '--exclude', '-f']);
+  let pattern = null; const paths = [];
+  for (; i < words.length; i++) {
+    const w = words[i];
+    if (w === '-e' || w === '--regexp') { pattern ??= words[++i]; continue; }
+    if (VALUED.has(w)) { i++; continue; }
+    if (w.startsWith('-')) continue;
+    if (pattern === null) pattern = w; else paths.push(w);
+  }
+  return pattern ? { pattern, paths: paths.length ? paths : ['.'] } : null;
+}
+
+// Does this search reach into another of the owner's projects (or a folder holding several)? Then the
+// catalog's best lines answer it first. A search inside this project alone goes through as typed.
+function steerSearch(root, pattern, paths, key) {
+  if (!pattern) return null;
+  let cat;
+  try { cat = catalog; } catch { return null; }
+  const projects = cat.readProjects(root).map((p) => path.resolve(root, p.path)).filter((d) => path.resolve(d) !== path.resolve(root));
+  if (!projects.length) return null;
+  const inside = (a, b) => { const r = path.relative(b, a); return !r.startsWith('..') && !path.isAbsolute(r); };
+  const reaches = paths.some((p) => { const full = path.resolve(root, p); return projects.some((d) => inside(full, d) || inside(d, full)); });
+  if (!reaches) return null;
+  const words = pattern.replace(/\\[a-z]/gi, ' ').split(/[^A-Za-z0-9$%@#._/:-]+/).filter(Boolean);
+  if (!words.length) return null;
+  if (secondTry(root, key)) return null;
+  const { hits, more } = cat.find(root, words);
+  if (!hits.length) return null; // nothing in the catalog's search: let the search run
+  return `Talenscape: this searches your other projects. Best lines first (\`city catalog find ${words.join(' ')}\`):\n${hits.join('\n')}`
+    + `${more ? `\n(${more} more lines: add a word to narrow it)` : ''}\nRead only the lines you need from these files. If you truly need the search as typed, run it again and it will go through.`;
 }
 
 const shellQuote = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
@@ -138,7 +193,15 @@ function steerBash(root, toolInput) {
     changed = true;
     return part.replace(step, `TALENSCAPE_ROOT=${shellQuote(root)} node --no-warnings ${shellQuote(RUN_TOOL)} ${shellQuote(step)}`);
   }).join('');
-  return changed || pushed ? { updatedInput: { ...toolInput, command: rewritten } } : null;
+  if (changed || pushed) return { updatedInput: { ...toolInput, command: rewritten } };
+  // Any other command: its output goes through the cap (short output unchanged, long output shortened
+  // with the full text saved). It still runs in the same shell, so cd and exported settings carry on.
+  // Left alone: background runs, commands that end the shell, and the same command asked again
+  // straight after (the AI needs all of it).
+  if (!command.trim() || toolInput.run_in_background || /\bexit\b/.test(command) || /\\\s*$/.test(command)) return null;
+  if (secondTry(root, `bash:${command}`)) return null;
+  const label = shellQuote(command.replace(/\s+/g, ' ').slice(0, 120));
+  return { updatedInput: { ...toolInput, command: `ts_f=$(mktemp); { ${command}\n} >"$ts_f" 2>&1; ts_s=$?; TALENSCAPE_ROOT=${shellQuote(root)} node --no-warnings ${shellQuote(RUN_TOOL)} --cap "$ts_f" ${label}; rm -f "$ts_f"; (exit $ts_s)` } };
 }
 
 export async function main() {
@@ -150,12 +213,17 @@ export async function main() {
   input = hook.input;
   const root = process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd();
   const result = await steer(root, input).catch(() => null);
-  if (!result) return;
-  if (result.updatedInput) result.updatedInput = hook.back(result.updatedInput);
-  const out = typeof result === 'string' ? { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: result }
-    : result.ask ? { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: result.ask }
-      : result.context ? { hookEventName: 'PreToolUse', additionalContext: result.context }
-        : { hookEventName: 'PreToolUse', updatedInput: result.updatedInput };
+  // Partway through a long job, the chat may pass the fresh-start limit: say so with this tool call.
+  let fresh = null;
+  try { fresh = sizeCheck(root, { transcriptPath: input.transcript_path, chat: input.session_id }); } catch { /* never in the way */ }
+  if (!result && !fresh) return;
+  if (result?.updatedInput) result.updatedInput = hook.back(result.updatedInput);
+  const out = !result ? { hookEventName: 'PreToolUse' }
+    : typeof result === 'string' ? { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: result }
+      : result.ask ? { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: result.ask }
+        : result.context ? { hookEventName: 'PreToolUse', additionalContext: result.context }
+          : { hookEventName: 'PreToolUse', updatedInput: result.updatedInput };
+  if (fresh) out.additionalContext = [out.additionalContext, fresh].filter(Boolean).join('\n');
   process.stdout.write(JSON.stringify({ hookSpecificOutput: out }));
 }
 

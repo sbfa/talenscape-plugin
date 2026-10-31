@@ -1,4 +1,16 @@
-# Put Talenscape in a project (for Claude Code)
+# Install Talenscape (for Claude Code)
+
+Asked to "install the Talenscape plugin"? It is not in Claude's built-in plugin catalog, so searching
+that catalog finds nothing. It installs from its own marketplace on GitHub:
+
+    /plugin marketplace add sbfa/talenscape-plugin
+    /plugin install talenscape@talenscape
+
+(or `claude plugin marketplace add sbfa/talenscape-plugin` then `claude plugin install talenscape@talenscape`
+from a terminal). The next chat in the project starts with the Talenscape summary. Needs Node.js 22.13+.
+A City key, if the owner has one, goes in `~/.talenscape/key` (never print it).
+
+## Put Talenscape in a project (an in-project copy)
 
 The owner says something like "Set up Talenscape here from GitHub sbfa/talenscape-plugin". Do this:
 

@@ -1,11 +1,14 @@
 // `city sync`: this project's city, both ways. Sends the skills the project keeps as files (names and
 // descriptions only) to the owner's Talenscape app, and writes back the skills the owner added to this
-// project's city in the app, as .claude/skills/<name>/SKILL.md and .agents/skills/<name>/SKILL.md
-// (marked, so only those are ever changed or removed).
+// project's city in the app, as .claude/skills/<name>/SKILL.md and .agents/skills/<name>/SKILL.md, or
+// only the folder of the one AI a skill is for (marked, so only those are ever changed or removed).
+// It also sends what every chat costs (lib/costs.mjs: numbers and connector names, no chat text), and switches off on this
+// computer the connectors the owner switched off in the app (lib/connectors.mjs).
 // Needs the owner's project key: the TALENSCAPE_KEY setting, or ~/.talenscape/key.
 // No key: nothing happens. No AI involved; the only address it talks to is the owner's own app.
 
 import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -49,31 +52,80 @@ export function collectSkills(root) {
   return out;
 }
 
-const fileFor = (s) => [
-  '---', `name: ${s.name}`, `description: ${String(s.description).replace(/\n/g, ' ')}`,
-  ...(s.triggers ? [`triggers: [${s.triggers}]`] : []), ...(s.plugin ? [`plugin: ${s.plugin}`] : []),
-  ...(MODELS.includes(s.model) ? [`models: [${s.model}]`] : []), // the AI it is for (the others leave it alone)
-  `managed-by: ${MANAGED}`, '---', '', (s.body || `# ${s.name}\n\n${s.description}`).trim(), '',
-].join('\n');
+// A skill the owner wrote in the app is their draft, in their own words: the AI it is for writes it
+// up properly once (status: draft → written). The write-up stays until the owner changes the draft,
+// which the draft mark (a fingerprint of the owner's words) tells.
+export const draftMark = (s) => 'd' + crypto.createHash('sha256').update(JSON.stringify([s.name, s.description, s.triggers ?? '', s.body ?? '', s.model ?? ''])).digest('hex').slice(0, 12); // starts with a letter: never read as a number
+// The app sends the fingerprint (draft) and, once an AI has written the skill up, that write-up.
+const markOf = (s) => s.draft ?? draftMark(s);
+const fileFor = (s) => {
+  const t = s.written ? { ...s, ...s.written } : s;
+  return [
+    '---', `name: ${s.name}`, `description: ${String(t.description).replace(/\n/g, ' ')}`,
+    ...(t.triggers ? [`triggers: [${t.triggers}]`] : []), ...(s.plugin ? [`plugin: ${s.plugin}`] : []),
+    ...(MODELS.includes(s.model) ? [`models: [${s.model}]`] : []), // the AI it is for (the others leave it alone)
+    `managed-by: ${MANAGED}`, ...(s.source === 'mine' ? [`status: ${s.written ? 'written' : 'draft'}`, `draft: ${markOf(s)}`] : []), '---', '', (t.body || `# ${s.name}\n\n${t.description}`).trim(), '',
+  ].join('\n');
+};
+
+// Write-ups an AI made in this project, for the owner's library: [{ name, draft, description, triggers, body, by }].
+export function writeUps(root) {
+  const out = [];
+  for (const d of SKILL_DIRS) {
+    try {
+      for (const n of fs.readdirSync(path.join(root, d, 'skills'))) {
+        let parsed;
+        try { parsed = parseSkill(fs.readFileSync(path.join(root, d, 'skills', n, 'SKILL.md'), 'utf8')); } catch { continue; }
+        const { meta, body } = parsed;
+        if (meta?.['managed-by'] !== MANAGED || meta.status !== 'written' || !meta.draft || out.some((o) => o.name === n)) continue;
+        const by = { '.claude': 'claude', '.grok': 'grok', '.gemini': 'gemini' }[d] ?? [].concat(meta.models ?? [])[0] ?? null;
+        out.push({ name: n, draft: String(meta.draft), description: meta.description ?? '', triggers: [].concat(meta.triggers ?? []).join(', '), body: body.trim(), by });
+      }
+    } catch { /* no folder */ }
+  }
+  return out;
+}
+
+// The owner's drafts still to write up, for the blink: [{ name, model, file }].
+export function draftsToWrite(root) {
+  const out = [];
+  for (const d of SKILL_DIRS) {
+    try {
+      for (const n of fs.readdirSync(path.join(root, d, 'skills'))) {
+        const file = `${d}/skills/${n}/SKILL.md`;
+        let meta;
+        try { meta = parseSkill(fs.readFileSync(path.join(root, file), 'utf8')).meta; } catch { continue; }
+        if (meta?.['managed-by'] === MANAGED && meta.status === 'draft' && !out.some((o) => o.name === n)) out.push({ name: n, model: [].concat(meta.models ?? [])[0] ?? null, file });
+      }
+    } catch { /* no folder */ }
+  }
+  return out;
+}
 
 // Write the app's skills into the project, in Claude Code's folder (.claude/skills) and the shared
-// one other AI tools read (.agents/skills); remove the ones taken out of the city. Never touches a
-// file it did not write. They are ordinary project files, saved with the rest of the work, so every
-// AI that reads the project (through GitHub too) sees the same skills.
-export const SKILL_DIRS = ['.claude', '.agents'];
-export function writeDown(root, skills) {
+// one other AI tools read (.agents/skills); a skill for one AI goes only where that AI reads (Claude
+// reads .agents too, so a Grok or Gemini skill goes in their own folder). Remove the ones taken out
+// of the city. Never touches a file it did not write. They are ordinary project files, saved with the
+// rest of the work, so every AI that reads the project (through GitHub too) sees the same skills.
+export const SKILL_DIRS = ['.claude', '.agents', '.grok', '.gemini'];
+export const dirsFor = (model) => ({ claude: ['.claude'], grok: ['.grok'], gemini: ['.gemini'] })[model] ?? (MODELS.includes(model) ? ['.agents'] : ['.claude', '.agents']);
+// removable: when given, only these names may be taken out (the local city knows only what it handed out itself).
+export function writeDown(root, skills, { removable = null } = {}) {
   const done = { written: [], removed: [], skipped: [] };
-  const wanted = new Set();
+  const wanted = new Set(), names = new Set(); // "folder/name", and the names
   for (const s of skills) {
     if (!NAME_RE.test(s.name ?? '')) continue;
-    wanted.add(s.name);
+    names.add(s.name);
     let wrote = false;
-    for (const d of SKILL_DIRS) {
+    for (const d of dirsFor(s.model)) {
+      wanted.add(`${d}/${s.name}`);
       const file = path.join(root, d, 'skills', s.name, 'SKILL.md'), text = fileFor(s);
       let old = null;
       try { old = fs.readFileSync(file, 'utf8'); } catch { /* new */ }
-      if (old !== null && parseSkill(old).meta?.['managed-by'] !== MANAGED) { if (!done.skipped.includes(s.name)) done.skipped.push(s.name); continue; } // the project's own file wins
+      const was = old === null ? null : parseSkill(old).meta;
+      if (old !== null && was?.['managed-by'] !== MANAGED) { if (!done.skipped.includes(s.name)) done.skipped.push(s.name); continue; } // the project's own file wins
       if (old === text) continue;
+      if (was?.status === 'written' && s.source === 'mine' && String(was.draft) === markOf(s)) continue; // written up from this very draft: keep it
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, text);
       wrote = true;
@@ -85,9 +137,9 @@ export function writeDown(root, skills) {
     try {
       for (const n of fs.readdirSync(dir)) {
         const file = path.join(dir, n, 'SKILL.md');
-        if (wanted.has(n) || !fs.existsSync(file) || parseSkill(fs.readFileSync(file, 'utf8')).meta?.['managed-by'] !== MANAGED) continue;
+        if (wanted.has(`${d}/${n}`) || (removable && !removable.has(n)) || !fs.existsSync(file) || parseSkill(fs.readFileSync(file, 'utf8')).meta?.['managed-by'] !== MANAGED) continue;
         fs.rmSync(path.join(dir, n), { recursive: true });
-        if (!done.removed.includes(n)) done.removed.push(n);
+        if (!names.has(n) && !done.removed.includes(n)) done.removed.push(n); // moved to another AI's folder: not removed
       }
     } catch { /* no folder */ }
   }
@@ -100,7 +152,7 @@ export function writeDown(root, skills) {
       if (keep.length !== have.split('\n').length) fs.writeFileSync(p, keep.join('\n'));
     } catch { /* none */ }
   }
-  return done;
+  return { ...done, listed: [...names] };
 }
 
 // shared/: the one folder other AIs may write in (until the city's shared space is live). A file named
@@ -147,7 +199,7 @@ export const NOTES_DIR = path.join('shared', 'notes');
 export function readNotes(root) {
   const dir = path.join(root, NOTES_DIR);
   try {
-    return fs.readdirSync(dir).filter((f) => /^[a-z0-9][a-z0-9-]*\.md$/.test(f) && f !== 'readme.md').map((f) => {
+    return fs.readdirSync(dir).filter((f) => /^[a-z0-9][a-zA-Z0-9-]*\.md$/.test(f) && f.toLowerCase() !== 'readme.md').map((f) => {
       const text = fs.readFileSync(path.join(dir, f), 'utf8'), id = f.slice(0, -3);
       const title = text.match(/^#\s+(.+)$/m)?.[1].trim() ?? id;
       return { id, ai: id.split('-')[0], title, body: text.replace(/^#\s+.+\n?/m, '').trim(), at: fs.statSync(path.join(dir, f)).mtime.toISOString() };
@@ -190,8 +242,21 @@ function saveOwner(home, owner) {
   try { fs.mkdirSync(path.dirname(ownerFile(home)), { recursive: true, mode: 0o700 }); fs.writeFileSync(ownerFile(home), JSON.stringify({ owner: !!owner }) + '\n', { mode: 0o600 }); } catch { /* optional */ }
 }
 
-export async function sync(root, { key = readKey(), url = process.env.TALENSCAPE_SYNC_URL || SYNC_URL, fetchImpl = fetch, home = os.homedir() } = {}) {
+// light: only what was added or changed in the app, both ways (no code for answer links, no summary): the quick
+// check before each of the owner's messages.
+// A folder in the temp area is never a real project (tests make them), and TALENSCAPE_NO_SYNC=1 (set by npm test)
+// switches the real check-in off. Before this, every test run created a "talenscape-session-…" project in the
+// owner's live app (110 on 2026-10-30) and nearly used up the free plan's daily database writes.
+export function isScratch(root, env = process.env) {
+  if (env.TALENSCAPE_NO_SYNC === '1') return true;
+  const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+  const tmp = real(os.tmpdir()), dir = real(root);
+  return dir === tmp || dir.startsWith(tmp + path.sep);
+}
+
+export async function sync(root, { key = readKey(), url = process.env.TALENSCAPE_SYNC_URL || SYNC_URL, fetchImpl = fetch, home = os.homedir(), light = false, applyConnectors = true, removable = null } = {}) {
   if (!key) return { off: true };
+  if (fetchImpl === fetch && isScratch(root)) return { off: true, scratch: true }; // only the real app is guarded; tests with a pretend app still run
   const id = projectId(root);
   const post = async (payload) => {
     const body = JSON.stringify({ project: { id, name: id }, ...payload });
@@ -209,12 +274,19 @@ export async function sync(root, { key = readKey(), url = process.env.TALENSCAPE
     return out;
   };
   let code = [];
-  try { code = await codeIndex(root); } catch { /* no map: no answers for other AIs this time */ }
+  if (!light) try { code = await codeIndex(root); } catch { /* no map: no answers for other AIs this time */ }
   const manifest = Object.fromEntries(code.map((f) => [f.path, f.hash]));
   let blink;
-  try { blink = await (await import('../session.mjs')).blink(root, undefined, { shared: true }); } catch { /* optional */ }
-  const out = await post({ skills: collectSkills(root), lists: sharedLists(root), notes: readNotes(root), blink, code: { manifest } });
+  if (!light) try { blink = await (await import('../session.mjs')).blink(root, undefined, { shared: true }); } catch { /* optional */ }
+  // What every chat costs (numbers and connector names only, never the chat's text): the full check-in only.
+  let costs;
+  if (!light) try { costs = (await import('./costs.mjs')).chatCosts(root, { home }) ?? undefined; } catch { /* optional */ }
+  const { habitsOf, applyHabits } = await import('./habits.mjs');
+  const out = await post({ skills: collectSkills(root), lists: sharedLists(root), notes: readNotes(root), written: writeUps(root), habits: habitsOf(root), blink, costs, ...(light ? {} : { code: { manifest } }) });
+  const habits = applyHabits(root, out.habitChanges); // switched on or off, added, changed in the app
   saveOwner(home, out.owner);
+  let connectors = null; // switched off in the app: applied to Claude Code on this computer (not in cloud chats)
+  if (applyConnectors) try { connectors = (await import('./connectors.mjs')).applyConnectorsOff(root, out.connectorsOff, { home }); } catch { /* optional */ }
   // Then only the files the app doesn't have yet (changed or new), in a few batches.
   let need = new Set(out.codeNeed ?? []), batches = 0, codeSent = 0;
   while (need.size && batches < MAX_BATCHES) {
@@ -232,7 +304,7 @@ export async function sync(root, { key = readKey(), url = process.env.TALENSCAPE
     need = new Set(r.codeNeed ?? []);
   }
   const notes = writeNotes(root, out.notes);
-  return { project: id, sent: out.kept ?? 0, code: codeSent, codeLeft: need.size, notes, ...writeDown(root, out.skills ?? []), others: out.others ?? [] };
+  return { project: id, sent: out.kept ?? 0, code: codeSent, codeLeft: need.size, notes, habits, connectors, ...writeDown(root, out.skills ?? [], { removable }), others: out.others ?? [] };
 }
 
 // The last check-in, for the blink's CITY line: { at, ok, project?, error? } (or no key).
@@ -240,13 +312,26 @@ const statusFile = (root) => path.join(root, '.city', 'sync.json');
 export function syncStatus(root) { try { return JSON.parse(fs.readFileSync(statusFile(root), 'utf8')); } catch { return null; } }
 function saveStatus(root, st) { try { fs.mkdirSync(path.dirname(statusFile(root)), { recursive: true }); fs.writeFileSync(statusFile(root), JSON.stringify({ at: new Date().toISOString(), ...st })); } catch { /* optional */ } }
 
+// Before each of the owner's messages (Claude's message hook): what was changed in the app since the
+// last check-in comes in, at most every 2 minutes, with a light check-in. One line when something did.
+export async function appPeek(root, { now = Date.now(), ...opts } = {}) {
+  const last = Date.parse(syncStatus(root)?.at ?? '') || 0;
+  if (now - last < 2 * 60_000) return null;
+  let r;
+  try { r = await sync(root, { ...opts, light: true }); } catch (err) { saveStatus(root, { ok: false, error: String(err.message).slice(0, 120) }); return null; }
+  saveStatus(root, r.off ? { ok: false, nokey: true } : { ok: true, project: r.project, notes: r.notes.length, skills: r.written.length });
+  if (r.off) return null;
+  const changed = [...r.written.map((n) => `+${n}`), ...r.removed.map((n) => `-${n}`), ...r.notes.map((n) => `+note ${n}`), ...(r.habits ? [`${r.habits} habit change(s)`] : [])];
+  return changed.length ? `Talenscape app: brought in what the owner changed there: ${changed.join(' ')}. Skills are files now; habits are in the OWNER/RULES lists (city habit). Follow them from here on.` : null;
+}
+
 export async function main(args) {
   const quiet = args.includes('--quiet'), root = process.cwd();
   try {
     const r = await sync(root);
     saveStatus(root, r.off ? { ok: false, nokey: true } : { ok: true, project: r.project, notes: r.notes.length, skills: r.written.length });
     if (r.off) { if (!quiet) console.log('No project key yet: make one in the app (Projects → Connect a project).'); return; }
-    const changed = [...r.written.map((n) => `+${n}`), ...r.removed.map((n) => `-${n}`), ...r.notes.map((n) => `+note ${n}`)];
+    const changed = [...r.written.map((n) => `+${n}`), ...r.removed.map((n) => `-${n}`), ...r.notes.map((n) => `+note ${n}`), ...(r.habits ? [`${r.habits} habit change(s)`] : [])];
     if (!quiet || changed.length || r.skipped.length) {
       console.log(`city sync ${r.project}: ${r.sent} skill file(s) sent${r.code ? `, ${r.code} changed code file(s) for answer links${r.codeLeft ? ` (${r.codeLeft} more next time)` : ''}` : ''}${changed.length ? `; from the app: ${changed.join(' ')}` : ''}${r.skipped.length ? `; kept the project's own ${r.skipped.join(', ')}` : ''}`);
     }

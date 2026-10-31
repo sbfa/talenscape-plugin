@@ -121,6 +121,27 @@ function saveLog(root, command, output) {
   return id;
 }
 
+// Any command's output, kept in check: short output comes back exactly as it was; long output (it
+// stays in the chat and is re-read on every later reply) becomes its start, the error lines from the
+// middle and its end, with the full text saved to search (city run --log N words).
+export const CAP_TOKENS = 2500;
+export function cap(root, output, command, { limit = CAP_TOKENS, record = true, again = 'Need it all? Run the same command again.' } = {}) {
+  const all = tokens(output);
+  if (all <= limit) return output;
+  const lines = output.replace(ANSI, '').split('\n');
+  const id = saveLog(root, command, output);
+  const take = (from, budget) => { const kept = []; let left = budget * 3.5; for (const l of from) { const c = clip(l); if (c.length + 1 > left) break; kept.push(c); left -= c.length + 1; } return kept; };
+  const head = take(lines, Math.floor(limit * 0.4));
+  const tail = take([...lines].reverse(), Math.floor(limit * 0.3)).reverse();
+  const middle = lines.slice(head.length, lines.length - tail.length);
+  const errors = take(middle.filter((l) => ERROR.test(l) && !/\b0 (failed|failing|errors?)\b/.test(l)), Math.floor(limit * 0.15));
+  const hidden = middle.length - errors.length;
+  const text = [...head, `… ${hidden} lines hidden (~${all} tokens in all). Search them: city run --log ${id} <words>. ${again}`,
+    ...(errors.length ? ['error lines from the hidden part:', ...errors] : []), ...tail].join('\n');
+  if (record) addSaving(root, 'trimmed output', all, tokens(text));
+  return text;
+}
+
 // savingsRoot: where the savings meter lives (the project), when running inside a sub-folder.
 export function run(root, command, budget = 150, { record = true, savingsRoot = root } = {}) {
   const started = Date.now();
@@ -173,6 +194,13 @@ export function readLog(root, id, words = [], budget = 200) {
 export function main(argv) {
   const b = argv.indexOf('--budget');
   const budget = b >= 0 ? Number(argv.splice(b, 2)[1]) || 150 : 150;
+  if (argv[0] === '--cap') { // --cap <file holding the output> <the command, for the log>
+    let output = '';
+    try { output = fs.readFileSync(argv[1], 'utf8'); } catch { /* nothing was written */ }
+    const root = process.env.TALENSCAPE_ROOT || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+    process.stdout.write(cap(root, output, argv.slice(2).join(' ')));
+    return;
+  }
   if (argv[0] === '--log') {
     console.log(readLog(process.cwd(), argv[1], argv.slice(2), budget));
     return;

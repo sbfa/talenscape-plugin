@@ -92,8 +92,14 @@ export async function graphFile(root, budget = GRAPH_BUDGET) {
     syms = db.prepare("SELECT id, qname, path, start_line FROM graph_nodes WHERE kind IN ('class', 'function', 'method') ORDER BY rank DESC").all()
       .map((n) => ({ ...n, calls: out.all(n.id).map((r) => r.n), by: inn.all(n.id).map((r) => r.n) })).filter((n) => n.calls.length || n.by.length);
     const imp = db.prepare("SELECT DISTINCT d.path AS p FROM graph_edges e JOIN graph_nodes d ON d.id = e.dst WHERE e.src = ? AND e.kind = 'imports' AND d.path != ? ORDER BY d.path");
+    // A relative import whose file isn't in the project (made at build time, or missing) is listed and
+    // marked, never silently dropped: a reader of this file can't tell a dropped import from no import.
+    const specs = db.prepare("SELECT DISTINCT target FROM graph_refs WHERE path = ? AND kind = 'imports' AND target LIKE '.%'");
+    const known = new Set(db.prepare("SELECT path FROM graph_nodes WHERE kind = 'file'").all().map((r) => r.path));
+    const missing = (file) => specs.all(file).map((r) => path.posix.normalize(path.posix.join(path.posix.dirname(file), r.target)))
+      .filter((p) => ![p, `${p}.js`, `${p}.mjs`, `${p}.ts`, `${p}/index.js`].some((c) => known.has(c))).map((p) => `${p} (not in the project)`);
     files = db.prepare("SELECT id, path FROM graph_nodes WHERE kind = 'file' ORDER BY path").all()
-      .map((f) => ({ path: f.path, uses: imp.all(f.id, f.path).map((r) => r.p) })).filter((f) => f.uses.length);
+      .map((f) => ({ path: f.path, uses: [...imp.all(f.id, f.path).map((r) => r.p), ...missing(f.path)] })).filter((f) => f.uses.length);
   } finally { db.close?.(); }
   const list = (a) => a.slice(0, PER).join(', ') + (a.length > PER ? ` +${a.length - PER}` : '');
   const head = ['# Code graph', '', 'What calls what, for an AI that reads this project but cannot run `city`. "→" calls, "←" called by.',
@@ -130,15 +136,17 @@ export async function writeSnips(root) {
       const lines = texts.get(n.path);
       if (!lines) continue;
       const calls = out.all(n.id).map((r) => r.n), by = inn.all(n.id).map((r) => r.n);
-      const num = (from, to) => lines.slice(from - 1, to).map((l, i) => `${String(from + i).padStart(4)}  ${l}`).join('\n');
-      const head = `${n.path}:${n.start_line}-${n.end_line} · ${n.kind} ${n.qname}\ncalls: ${calls.join(', ') || 'nothing in the project'}\ncalled by: ${by.join(', ') || 'nothing in the project'}\n\n`;
+      // No line numbers in a piece: code moving down a file then leaves the piece as it is (where each piece
+      // starts is in .city/names), so a save only rewrites the pieces whose code changed.
+      const num = (from, to) => lines.slice(from - 1, to).join('\n');
+      const head = `${n.path} · ${n.kind} ${n.qname} (lines: .city/names)\ncalls: ${calls.join(', ') || 'nothing in the project'}\ncalled by: ${by.join(', ') || 'nothing in the project'}\n\n`;
       const size = n.end_line - n.start_line + 1, members = n.kind === 'class' ? kids.all(n.id) : [];
       const fullName = snipPath(n.path, n.qname).replace(/\.txt$/, '.full.txt');
       let body;
       // A class: its first lines and a list of its parts, each with its own small file.
-      if (members.length) body = `${num(n.start_line, Math.min(n.end_line, n.start_line + 7))}\n      …\nparts: ${members.map((m) => `${m.qname} ${m.start_line}-${m.end_line} (${snipPath(n.path, m.qname)})`).join(', ')}`;
+      if (members.length) body = `${num(n.start_line, Math.min(n.end_line, n.start_line + 7))}\n      …\nparts: ${members.map((m) => `${m.qname} (${snipPath(n.path, m.qname)})`).join(', ')}`;
       // A long piece: its beginning, and the whole of it in a second file, opened only when needed.
-      else if (size > LONG_LINES) { body = `${num(n.start_line, n.start_line + SHORT_LINES - 1)}\n      … ${size - SHORT_LINES} more lines (${n.start_line + SHORT_LINES}-${n.end_line}). The whole piece: ${fullName}`; wanted.set(fullName, `${head}${num(n.start_line, n.end_line)}\n`); }
+      else if (size > LONG_LINES) { body = `${num(n.start_line, n.start_line + SHORT_LINES - 1)}\n      … ${size - SHORT_LINES} more lines. The whole piece: ${fullName}`; wanted.set(fullName, `${head}${num(n.start_line, n.end_line)}\n`); }
       else body = num(n.start_line, n.end_line);
       wanted.set(snipPath(n.path, n.qname), `${head}${body}\n`);
     }

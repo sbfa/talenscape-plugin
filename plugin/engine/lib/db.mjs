@@ -9,7 +9,7 @@ const SCHEMA = fs.readFileSync(new URL('../db/schema.sql', import.meta.url), 'ut
 const SCHEMA_VERSION = 4; // bump whenever parsing changes: forces a full re-read everywhere
 
 // .city/ holds the map and scratch files; only the session notes are meant to be saved in git.
-export const CITY_GITIGNORE = '# Talenscape: keep only the session notes and what other AIs read\n*\n!.gitignore\n!state.json\n!BLINK.md\n!MAP.md\n!GRAPH.md\n!FORMATS.md\n!facts.md\n!HANDOFF.md\n!layout.json\n!design.json\n!snips/\n!snips/**\n!map/\n!map/**\n!names/\n!names/**\n';
+export const CITY_GITIGNORE = '# Talenscape: keep only the session notes and what other AIs read\n*\n!.gitignore\n!state.json\n!BLINK.md\n!MAP.md\n!GRAPH.md\n!NOTES.md\n!FORMATS.md\n!facts.md\n!HANDOFF.md\n!layout.json\n!design.json\n!snips/\n!snips/**\n!map/\n!map/**\n!names/\n!names/**\n!catalog/\n!catalog/**\n';
 
 export function openDb(root) {
   fs.mkdirSync(path.join(root, '.city'), { recursive: true });

@@ -49,11 +49,12 @@ const COMMENT = /^\s*(\/\/|\/\*|\*|#)/;
 // Programming words that name the same thing ("environment" / env). Local and fixed: no AI involved.
 const SYNONYMS = [
   ['env', 'environment'], ['dict', 'dictionary', 'mapping'], ['serialize', 'serialise', 'dump'], ['deserialize', 'deserialise', 'load'],
-  ['config', 'configuration', 'settings'], ['auth', 'authentication', 'login'], ['args', 'arguments', 'argv'], ['param', 'parameter', 'params'],
+  ['config', 'configuration', 'settings'], ['auth', 'authentication', 'authorization', 'login'], ['args', 'arguments', 'argv'], ['param', 'parameter', 'params'],
   ['err', 'error'], ['msg', 'message'], ['util', 'utility', 'helper'], ['init', 'initialize', 'initialise', 'setup'], ['repo', 'repository'],
   ['dir', 'directory', 'folder'], ['cmd', 'command'], ['opt', 'option'], ['str', 'string', 'text'], ['num', 'number'], ['req', 'request'],
-  ['res', 'response', 'reply'], ['db', 'database'], ['simple', 'primitive', 'native', 'basic'], ['delete', 'remove'], ['create', 'make', 'new'],
+  ['res', 'response', 'reply'], ['db', 'database'], ['simple', 'primitive', 'native', 'basic'], ['delete', 'remove', 'drop', 'strip'], ['create', 'make', 'new'],
   ['find', 'lookup', 'search', 'get'], ['check', 'validate', 'verify'], ['mistype', 'typo', 'similar'], ['alias', 'alternative', 'nickname'],
+  ['post', 'after'], ['monitor', 'watch', 'watcher'],
 ];
 const SYN = new Map();
 for (const group of SYNONYMS) for (const w of group) SYN.set(stem(w), group.map(stem).filter((x) => x !== stem(w)));
@@ -155,12 +156,18 @@ export function ask(root, query, budget = 300) {
         const ownAll = nameWords(n.name).map(stem).every(inQuery) && hit.some((x) => !GENERIC.has(x));
         // A name that is all query words is strong evidence when it covers much of the question;
         // one word out of five (a property called "name") is weak.
-        if (covered > 1 || ownAll) bump(n, 5 * covered + (ownAll ? 5 * Math.min(1, 2 / words.length) : 0));
+        // A name that is just one word of a longer question ("body" for "where is the response body
+        // written") says little on its own: half weight, so code that matches the question wins.
+        const lone = hit.length === 1 && words.length >= 3 ? 0.5 : 1;
+        if (covered > 1 || ownAll) bump(n, lone * (5 * covered + (ownAll ? 5 * Math.min(1, 2 / words.length) : 0)));
       }
     }
     const byName = db.prepare(`SELECT * FROM graph_nodes WHERE kind != 'file' AND name = ? COLLATE NOCASE ORDER BY rank DESC LIMIT 6`);
     // A one-word question that is exactly a name ("editDistance", "_run_validator") means that thing.
-    if (all.length === 1) for (const n of byName.all(query.trim())) bump(n, 40);
+    // A name the question spells out (whole, or two words glued) is the thing asked for, even when
+    // its code doesn't repeat the words.
+    const spelled = (n) => { cands.get(n.id).exact = true; };
+    if (all.length === 1) for (const n of byName.all(query.trim())) { bump(n, 40); spelled(n); }
     const byFile = db.prepare(`SELECT * FROM graph_nodes WHERE kind = 'file' AND (name = ?1 COLLATE NOCASE OR name LIKE ?1 || '.%') LIMIT 3`);
     for (const [v, weight] of variants) {
       if (v.length < 3) continue;
@@ -168,6 +175,7 @@ export function ask(root, query, budget = 300) {
         // Prefer names whose own words are exactly the query words (sendFile over sendfile).
         const exact = nameWords(n.name).join('') === v.replace(/_/g, '') && nameWords(n.name).length === weight;
         bump(n, 10 * weight + (exact ? 3 : 0));
+        spelled(n);
       }
       for (const n of byFile.all(v)) bump(n, 4 * weight);
     }
@@ -194,10 +202,17 @@ export function ask(root, query, budget = 300) {
     });
     if (!cands.size) return 'No matches.';
 
+    // Two pieces with the same name (Email in fields.py and in validate.py): the one in a file named
+    // after a question word ("validate an email") fits better. Only a word the name doesn't already have counts.
+    const sameName = new Map();
+    for (const c of cands.values()) sameName.set(c.node.name, (sameName.get(c.node.name) ?? 0) + 1);
+    const inFileNamed = (n) => n.kind !== 'file' && sameName.get(n.name) > 1 && nameWords(path.basename(n.path).replace(/\.[^.]+$/, '')).map(stem)
+      .some((x) => !GENERIC.has(x) && x.length > 2 && stems.includes(x) && !nameWords(n.qname).map(stem).includes(x));
+    const aboutTypes = stems.some((w) => /^(type|interfac|declar|signatur)/.test(w));
     const aboutSide = stems.some((w) => /^(test|exampl|benchmark|spec)/.test(w));
     const aboutDocs = stems.some((w) => /^(doc|readm|guid|changelog|histor|tutorial|explain)/.test(w));
     const ranked = [...cands.values()]
-      .map((c) => ({ ...c, score: (c.name + Math.sqrt(c.text) * 2 / lengthDamp(c.node) + Math.log1p(c.node.rank) * 0.5) * (!aboutSide && isSide(c.node.path) ? 0.5 : 1) * (!aboutDocs && isProse(c.node.path) ? 0.45 : 1) }))
+      .map((c) => ({ ...c, score: (c.name + Math.sqrt(c.text) * 2 / lengthDamp(c.node) + Math.log1p(c.node.rank) * 0.5) * (!aboutSide && isSide(c.node.path) ? 0.5 : 1) * (!aboutDocs && isProse(c.node.path) ? 0.45 : 1) * (inFileNamed(c.node) ? 1.25 : 1) * (!aboutTypes && /\.d\.[cm]?ts$/.test(c.node.path) ? 0.5 : 1) * (c.text === 0 && !c.exact ? 0.6 : 1) })) // a name with nothing in its code about the question counts for less
       .sort((a, b) => b.score - a.score);
     // TALENSCAPE_DEBUG=1: why each of the top candidates scored what it did.
     if (process.env.TALENSCAPE_DEBUG) for (const c of ranked.slice(0, 6)) console.error(`${c.score.toFixed(1)} name ${c.name.toFixed(1)} text ${c.text.toFixed(1)} rank ${c.node.rank.toExponential(1)} ${c.node.qname} ${c.node.path}:${c.node.start_line}`);
@@ -212,6 +227,7 @@ export function ask(root, query, budget = 300) {
   }
 }
 
+export const UNSURE_LEAD = 1.35;
 function render(db, root, ranked, budget) {
   const out = new Out(budget);
   const [top, ...rest] = ranked;
@@ -226,7 +242,11 @@ function render(db, root, ranked, budget) {
 
   // Reserve room for the "also" line before spending the rest on code.
   const also = rest.slice(0, 4).map((c) => at(c.node, [...c.lines][0] ?? c.node.start_line));
-  const alsoLine = also.length ? 'also: ' + also.join(' · ') : '';
+  // A close race means a shaky first pick: measured on the scoreboard sets, a lead under 35% was wrong
+  // about 4 times in 10, a bigger one less than 1 in 10. Saying so lets the AI check these first
+  // instead of reading whole files, and trust the sure answers.
+  const unsure = rest.length && top.score < rest[0].score * UNSURE_LEAD;
+  const alsoLine = also.length ? `${unsure ? 'unsure, also check' : 'also'}: ` + also.join(' · ') : '';
   out.left -= alsoLine.length + 1;
 
   const lines = fileLines(root, n.path);

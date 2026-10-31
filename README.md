@@ -1,4 +1,4 @@
-# Talenscape 0.5.0
+# Talenscape 0.5.1
 
 Spend fewer tokens and keep the thread between AI sessions. Talenscape gives Claude Code a map of your
 project: a ~400-token summary of where you left off at every start, code answers in a few lines instead

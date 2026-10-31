@@ -29,6 +29,21 @@ If you don't see one, run `city blink` first.
 - The map refreshes itself (only changed files) each time `blink` runs; run `city index`
   after big edits.
 
+## Skills or notes added in the app
+
+Each `blink` checks in with the owner's app and brings down what was added there. Mid-chat,
+when the owner says "reload skills" (or "check the app"), run `city sync` once and tell them
+what came in. Nothing checks in by itself between chats.
+A `WRITE UP` line in the blink naming Claude: write that draft up properly, once, as
+`AGENTS.md` step 7 says.
+
+## Habits (the OWNER and RULES lines)
+
+The owner says "new habit: …", "switch off the habit about …", "change/drop …": run
+`city habit` to see them numbered, then `city habit add "words" [--me]`, `on N`, `off N`,
+`edit N "words"` or `drop N`, and show the owner the new list in one line. `--me` is for how to
+work with the owner; without it, a rule for the project.
+
 ## Run commands with trimmed output
 
 Noisy commands (tests, installs, builds, long git logs) are rewritten automatically to run
@@ -57,8 +72,11 @@ publish or change settings needs the owner's own OK in this chat first.
 ## The city on this computer (city view)
 
 `city view` opens the 3D city of this project in a browser on this computer (it prints the address;
-Ctrl+C stops it). It reads only this project's files: skills, each AI's list in `shared/`, the
-library. Nothing is sent anywhere. Buildings added there come back down as skill files. The first time,
+Ctrl+C stops it). With the owner's project key and the online city reachable, it shows the online
+city itself, live: a change made on the phone shows there within a second and its skill files are
+written or removed here. Without the key (or offline) it reads only this project's files (skills, each
+AI's list in `shared/`, the library) and sends nothing; changes made offline go up once the online city
+is back. Buildings added there come back down as skill files. The first time,
 it needs a City key (free during early access, from talenscape.com/city; then `city license <key>`):
 the city itself is downloaded with it and kept on the computer. In a cloud
 session there is no browser to open it: say so, and suggest running it on the owner's computer.
@@ -92,9 +110,9 @@ lines). Read just the part you need with offset/limit, or repeat the read if you
 
 - **Risky actions** (deleting files, `git reset --hard`/`clean`/`rebase`/`--amend`, mass edits,
   database deletes, edits to core files like `package.json` or settings, removing 40+ lines,
-  or changing a file 15+ others depend on): a snapshot is taken first and **deep-dive mode**
-  turns on for 15 minutes: no trimming, no outlines. Use it: run `city impact`, read the
-  affected code fully, run the full tests, and `city check`.
+  or changing a file 15+ others depend on): a snapshot is taken first (undo: `city rollback N`).
+  The full note comes at most every 15 minutes, a one-line snapshot note in between; savings stay
+  on. Check what depends on it (`city impact`) before changing shared code.
 - **Can't-be-undone actions** (publishing, deploying, online data changes, force-push, sending
   data out): the owner is asked to confirm. Never work around this.
 - `city checkpoint "why"` snapshots now; `city checkpoints` lists; `city rollback [id]` restores

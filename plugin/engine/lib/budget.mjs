@@ -25,7 +25,8 @@ function skillsIn(root, dir) {
   return out;
 }
 
-// { claude: { count, chars, tokens, share, biggest: [names] }, … }: what each tool loads every session.
+// { claude: { count, chars, tokens, share, biggest: [names], each: [{ name, tokens }] }, … }: what each
+// tool loads every session, in all and per skill.
 export function skillBudget(root) {
   const out = {};
   for (const [ai, dirs] of Object.entries(FOLDERS)) {
@@ -33,7 +34,8 @@ export function skillBudget(root) {
     for (const d of dirs) for (const s of skillsIn(root, d)) if (!seen.has(s.name) && (!s.models.length || s.models.includes(ai) || (ai === 'codex' && s.models.includes('chatgpt')))) seen.set(s.name, s);
     const list = [...seen.values()], chars = list.reduce((a, s) => a + s.name.length + s.description.length + ENTRY_EXTRA, 0);
     out[ai] = { count: list.length, chars, tokens: Math.ceil(chars / 3.5), share: chars / LISTING_ROOM, // tokens: ~3.5 characters each, as lib/tokens.mjs
-      biggest: list.sort((a, b) => b.description.length - a.description.length).slice(0, 3).map((s) => s.name) };
+      biggest: list.sort((a, b) => b.description.length - a.description.length).slice(0, 3).map((s) => s.name),
+      each: list.map((s) => ({ name: s.name, tokens: Math.ceil((s.name.length + s.description.length + ENTRY_EXTRA) / 3.5) })) };
   }
   return out;
 }
