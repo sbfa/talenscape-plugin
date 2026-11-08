@@ -6,7 +6,7 @@ Any other AI (Grok, Meta Muse, ChatGPT… reading this project, e.g. through Git
    its one-time setup. No file for you? Create `shared/<you>.md` following `shared/README.md`.
 1. Read `.city/BLINK.md`: the same session summary Claude Code starts with (the owner's rules, decisions,
    where things stand, what's next, lessons). Its rules apply to you too.
-   Can you run commands (Grok Build, Gemini CLI…)? Run `city blink` (from `.talenscape/plugin/bin/`) instead: the same summary, and it
+   Can you run commands (Grok Build, Gemini CLI…)? Run `city blink` (from `.talenscape/plugin/scripts/`) instead: the same summary, and it
    first brings in what the owner added in the app.
    The owner's habits (OWNER and RULES lines) change with `city habit` (run it for how).
    Then `.city/APP.md` if it is there: what the owner set in the Talenscape app (habits, their skills,

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Talenscape session start: install the engine's add-ons once, put `city` on the AI's command
-# path when running from a project checkout, then print the blink summary.
+# path, then print the blink summary.
 HERE="$PWD"
 # What Claude Code says about this start (startup, resume, compact or clear), read once before anything else runs.
 [ -t 0 ] || TALENSCAPE_HOOK_INPUT="$(cat)"; export TALENSCAPE_HOOK_INPUT
@@ -16,9 +16,10 @@ if ! node -e "import('web-tree-sitter')" >/dev/null 2>&1; then
     npm install --omit=dev --ignore-scripts --no-audit --no-fund --no-package-lock --silent >/dev/null 2>&1
   fi
 fi
-# A plugin's bin/ is on the path already; a project checkout needs it added.
-if [ -n "$CLAUDE_ENV_FILE" ] && [ -z "$CLAUDE_PLUGIN_ROOT" ]; then
-  echo "export PATH=\"$PLUGIN/bin:\$PATH\"" >> "$CLAUDE_ENV_FILE"
+# Put `city` on the AI's command path, installed as a plugin or as a project copy. It lives in scripts/,
+# not bin/: claude.ai refuses to add a plugin that has a top-level bin/ folder (2026-11-07).
+if [ -n "$CLAUDE_ENV_FILE" ]; then
+  echo "export PATH=\"$PLUGIN/scripts:\$PATH\"" >> "$CLAUDE_ENV_FILE"
 fi
 # With the owner's project key: send this project's skills to the app and bring back what was added
 # there (quiet unless something changed; never holds up or breaks the session).

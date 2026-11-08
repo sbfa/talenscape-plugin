@@ -194,6 +194,25 @@ export async function codeIndex(root) {
   } finally { db.close?.(); }
 }
 
+// The map itself, for the answer link's ask (the same `city ask`, run on Cloudflare): the tables city ask
+// reads, for the files the code index sends (never one that looks like it holds a key), packed small.
+// hash: sent again only when it changes.
+export async function mapCopy(root, paths) {
+  const { openDb } = await import('./db.mjs');
+  const { NODE_COLS } = await import('./mapmem.mjs');
+  const { gzipSync } = await import('node:zlib');
+  const keep = new Set(paths), db = openDb(root);
+  try {
+    const nodes = db.prepare(`SELECT ${NODE_COLS.join(', ')} FROM graph_nodes ORDER BY id`).all().filter((n) => keep.has(n.path));
+    const ids = new Set(nodes.map((n) => n.id));
+    const edges = db.prepare('SELECT src, dst, kind, line FROM graph_edges ORDER BY rowid').all().filter((e) => ids.has(e.src) && ids.has(e.dst));
+    const snips = db.prepare('SELECT path, start_line, end_line, body FROM snippet_fts ORDER BY rowid').all().filter((r) => keep.has(r.path));
+    const json = JSON.stringify({ nodes: nodes.map((n) => NODE_COLS.map((c) => n[c])), edges: edges.map((e) => [e.src, e.dst, e.kind, e.line]), snips: snips.map((r) => [r.path, r.start_line, r.end_line, r.body]) });
+    return { hash: crypto.createHash('sha256').update(json).digest('hex').slice(0, 32), data: gzipSync(json).toString('base64') };
+  } finally { db.close?.(); }
+}
+const MAP_PART = 900_000; // the app keeps parts this size (worker/answers.mjs)
+
 // The library: notes in shared/notes/<who>-<date>-<title>.md, from the AIs, the owner and Claude.
 export const NOTES_DIR = path.join('shared', 'notes');
 export function readNotes(root) {
@@ -276,13 +295,15 @@ export async function sync(root, { key = readKey(), url = process.env.TALENSCAPE
   let code = [];
   if (!light) try { code = await codeIndex(root); } catch { /* no map: no answers for other AIs this time */ }
   const manifest = Object.fromEntries(code.map((f) => [f.path, f.hash]));
+  let map = null;
+  if (code.length) try { map = await mapCopy(root, code.map((f) => f.path)); } catch { /* no map copy this time: ask on the answer link waits */ }
   let blink;
   if (!light) try { blink = await (await import('../session.mjs')).blink(root, undefined, { shared: true }); } catch { /* optional */ }
   // What every chat costs (numbers and connector names only, never the chat's text): the full check-in only.
   let costs;
   if (!light) try { costs = (await import('./costs.mjs')).chatCosts(root, { home }) ?? undefined; } catch { /* optional */ }
   const { habitsOf, applyHabits } = await import('./habits.mjs');
-  const out = await post({ skills: collectSkills(root), lists: sharedLists(root), notes: readNotes(root), written: writeUps(root), habits: habitsOf(root), blink, costs, ...(light ? {} : { code: { manifest } }) });
+  const out = await post({ skills: collectSkills(root), lists: sharedLists(root), notes: readNotes(root), written: writeUps(root), habits: habitsOf(root), blink, costs, ...(light ? {} : { code: { manifest } }), ...(map ? { map: { hash: map.hash } } : {}) });
   const habits = applyHabits(root, out.habitChanges); // switched on or off, added, changed in the app
   saveOwner(home, out.owner);
   let connectors = null; // switched off in the app: applied to Claude Code on this computer (not in cloud chats)
@@ -302,6 +323,10 @@ export async function sync(root, { key = readKey(), url = process.env.TALENSCAPE
     const r = await post({ code: { manifest, files: batch } });
     codeSent += batch.length; batches++;
     need = new Set(r.codeNeed ?? []);
+  }
+  if (out.mapNeed && map) { // the whole map, in parts (only when it changed)
+    const of = Math.ceil(map.data.length / MAP_PART);
+    for (let part = 0; part < of; part++) await post({ map: { hash: map.hash, part, of, data: map.data.slice(part * MAP_PART, (part + 1) * MAP_PART) } });
   }
   const notes = writeNotes(root, out.notes);
   return { project: id, sent: out.kept ?? 0, code: codeSent, codeLeft: need.size, notes, habits, connectors, ...writeDown(root, out.skills ?? [], { removable }), others: out.others ?? [] };
