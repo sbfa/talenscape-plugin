@@ -25,7 +25,8 @@ Any other AI (Grok, Meta Muse, ChatGPT… reading this project, e.g. through Git
    Asked what something is or is called? Check the file the search or card names before answering. `.city/NOTES.md`: the notes from the others meant for you, each with its corrections (skip
    the ones listed as replaced). `.city/GRAPH.md`: what calls what.
 3. Do whatever task the owner asks with that context: plan, review, explain, write code or text.
-4. Only the owner or Claude Code changes this project. Hand changes back as text or a patch in your
+4. Only the owner, Claude Code and the AIs named on the blink's `EDITS:` line (if there is one; follow
+   that line) change this project. Everyone else: hand changes back as text or a patch in your
    reply; don't edit files, commit, push or open pull requests here. The exceptions: a skill the blink tells you to write
    up (step 7), your own list in `shared/<you>.md`, and notes for the others in the library, `shared/notes/` (see its README).
 5. **Saving something for the others** (a note, a picture, a file), every time:

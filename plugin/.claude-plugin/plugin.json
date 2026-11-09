@@ -1,7 +1,7 @@
 {
   "name": "talenscape",
   "displayName": "Talenscape",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "45× fewer tokens on code questions. Talenscape gives your AI a ~400-token summary at the start of each chat and a map of your project, so it reads a few lines instead of whole files.",
   "author": { "name": "Talenscape" },
   "homepage": "https://talenscape.com",

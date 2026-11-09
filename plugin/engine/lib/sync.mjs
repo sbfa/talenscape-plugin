@@ -303,9 +303,13 @@ export async function sync(root, { key = readKey(), url = process.env.TALENSCAPE
   let costs;
   if (!light) try { costs = (await import('./costs.mjs')).chatCosts(root, { home }) ?? undefined; } catch { /* optional */ }
   const { habitsOf, applyHabits } = await import('./habits.mjs');
-  const out = await post({ skills: collectSkills(root), lists: sharedLists(root), notes: readNotes(root), written: writeUps(root), habits: habitsOf(root), blink, costs, ...(light ? {} : { code: { manifest } }), ...(map ? { map: { hash: map.hash } } : {}) });
+  const { readEditors, writeEditors } = await import('./editors.mjs');
+  const editors = readEditors(root); // which AIs may change this project's code (null: never set here)
+  const out = await post({ skills: collectSkills(root), lists: sharedLists(root), notes: readNotes(root), written: writeUps(root), habits: habitsOf(root), blink, costs, ...(editors ? { editors } : {}), ...(light ? {} : { code: { manifest } }), ...(map ? { map: { hash: map.hash } } : {}) });
   const habits = applyHabits(root, out.habitChanges); // switched on or off, added, changed in the app
   saveOwner(home, out.owner);
+  // Switched in the app (this person's own city): kept in the project, where the summary and the AIs read it.
+  if (out.editors && JSON.stringify(out.editors) !== JSON.stringify(editors)) writeEditors(root, out.editors);
   let connectors = null; // switched off in the app: applied to Claude Code on this computer (not in cloud chats)
   if (applyConnectors) try { connectors = (await import('./connectors.mjs')).applyConnectorsOff(root, out.connectorsOff, { home }); } catch { /* optional */ }
   // Then only the files the app doesn't have yet (changed or new), in a few batches.

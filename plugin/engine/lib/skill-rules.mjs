@@ -66,3 +66,20 @@ export function applyHabit(st, c) {
   st.rulesAt = new Date().toISOString();
   return true;
 }
+
+// Which other AIs may change a project's code (editors.mjs on a computer; the online city keeps a copy).
+export const EDIT_AIS = ['chatgpt', 'gemini', 'grok', 'muse', 'cursor', 'codex', 'copilot'];
+export const AI_NAMES = { chatgpt: 'ChatGPT', gemini: 'Gemini', grok: 'Grok', muse: 'Meta Muse', cursor: 'Cursor', codex: 'Codex', copilot: 'GitHub Copilot' };
+export const EDIT_BRANCH = 'talenscape-edits';
+
+export const cleanEditors = (v) => ({
+  ais: [...new Set((Array.isArray(v?.ais) ? v.ais : []).map((a) => String(a).toLowerCase()).filter((a) => EDIT_AIS.includes(a)))].sort((a, b) => EDIT_AIS.indexOf(a) - EDIT_AIS.indexOf(b)),
+  where: v?.where === 'main' ? 'main' : 'branch',
+});
+// The line every AI's start-of-chat summary shows, only when an AI besides Claude may change the project.
+export function editsLine(v) {
+  const e = cleanEditors(v ?? {});
+  if (!e.ais.length) return '';
+  const where = e.where === 'main' ? 'straight on main' : `on the branch ${EDIT_BRANCH} (the owner takes it in)`;
+  return `EDITS: ${e.ais.map((a) => AI_NAMES[a]).join(', ')} may change this project's code, ${where}: keep the tests passing, never put keys in files, leave a note in shared/notes/ saying what changed (this overrides AGENTS.md step 4 for them). Other AIs hand changes back as text.`;
+}

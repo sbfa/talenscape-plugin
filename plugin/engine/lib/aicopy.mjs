@@ -24,7 +24,8 @@ import). It holds only the summary, the map and the shared files: no code, no im
    A question about another of the owner's projects: an exact word (a price, ID, address)? Search for it
    first. Vague? \`catalog/COMPANY.md\` (every project in one place, read once per chat), then that
    project's card, \`catalog/<project>.md\` (its key files).
-5. Only the owner or Claude Code changes the project. You can't save here: hand anything to keep
+5. Only the owner, Claude Code and the AIs named on BLINK.md's EDITS line change the project (in its own
+   repo, never here). You can't save here: hand anything to keep
    (your list, a note, a change) to the owner as text in your reply, and they pass it on.
 
 This copy is rebuilt every time the project's work is pushed; import it again in a new chat to get

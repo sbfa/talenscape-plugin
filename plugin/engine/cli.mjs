@@ -18,6 +18,7 @@ const HELP = `city <command> …
   run <command> | run --log N [words]                 trimmed command output
   check-skills | sync                                 check the skills shelf; sync with the app
   license [key] | ping [on|off]                       City plan key; the weekly anonymous count
+  editors [<ai> on|off] [where branch|main]          which other AIs may change this project's code
   fresh [on|off|limit N]                             long chat: carry on in a new chat by itself
   receipt [chat.jsonl]                              where this chat's tokens went
   ais                                               get this project ready for Grok, Muse, ChatGPT…
@@ -54,7 +55,7 @@ if (cmd === 'run') {
   (await import('./lib/notes.mjs')).main(root, rest);
 } else if (cmd === 'install') {
   (await import('./lib/install.mjs')).main(rest);
-} else if (SESSION.has(cmd) || MAP.has(cmd) || SAFETY.has(cmd) || cmd === 'check-skills' || cmd === 'check' || cmd === 'sync' || cmd === 'ais' || cmd === 'view' || cmd === 'license' || cmd === 'ping' || cmd === 'export') {
+} else if (SESSION.has(cmd) || MAP.has(cmd) || SAFETY.has(cmd) || cmd === 'check-skills' || cmd === 'check' || cmd === 'sync' || cmd === 'ais' || cmd === 'view' || cmd === 'license' || cmd === 'ping' || cmd === 'export' || cmd === 'editors') {
   process.chdir(root);
   if (SESSION.has(cmd)) await (await import('./session.mjs')).main([cmd, ...rest]);
   else if (MAP.has(cmd)) await (await import('./city.mjs')).main([cmd, ...rest]);
@@ -66,6 +67,7 @@ if (cmd === 'run') {
   else if (cmd === 'ping') (await import('./lib/ping.mjs')).main(rest);
   else if (cmd === 'export') (await import('./lib/export.mjs')).main(rest);
   else if (cmd === 'ais') await (await import('./lib/ais.mjs')).main(rest);
+  else if (cmd === 'editors') (await import('./lib/editors.mjs')).main(rest);
   else (await import('./skills.mjs')).main(['check']);
 } else {
   console.log(HELP);

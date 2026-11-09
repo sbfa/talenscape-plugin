@@ -148,6 +148,8 @@ export async function blink(root = process.cwd(), budget = BUDGET, { nextSession
     st.next && 'next ' + st.next + (st.touches?.length ? ` (files: ${st.touches.map(short).join(', ')})` : ''),
   ];
   const decisions = st.decisions ?? [];
+  const { readEditors, editsLine } = await import('./lib/editors.mjs');
+  const edits = editsLine(readEditors(root));
   const symbols = st.symbols ?? [];
   const entries = [
     // The header carries the warning that the notes are out of date: it is never dropped or shortened.
@@ -161,6 +163,7 @@ export async function blink(root = process.cwd(), budget = BUDGET, { nextSession
     ...rollbackLine(root, st, nextSession || shared).map((text) => ({ key: 'rollback', kind: 'progress', text })),
     st.owner?.length && { key: 'owner', kind: 'rule', text: `OWNER: ${join(st.owner)}` },
     st.rules?.length && { key: 'rules', kind: 'rule', text: `RULES: ${join(st.rules)}` },
+    edits && { key: 'edits', kind: 'rule', text: edits }, // which other AIs may change the code (editors.mjs)
     env && { key: 'env', kind: 'rule', text: `ENV: ${Object.entries(env).map(([k, v]) => `${k} ${v}`).join(' · ')}` },
     decisions.length && { key: 'decided', kind: 'done', text: `DECIDED: ${join(decisions)}`, short: `DECIDED: ${join(decisions.slice(-3).reverse().map((d) => clip(d, 60)))}${decisions.length > 3 ? ` +${decisions.length - 3} older (city decisions)` : ''}` }, // the newest, which are the ones still unfamiliar
     st.design?.length && { key: 'design', kind: 'extra', drop: 4, text: `DESIGN (read city decisions first): ${st.design.map((d) => d.split(':')[0]).join(', ')}` },

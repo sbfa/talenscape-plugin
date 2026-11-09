@@ -31,7 +31,7 @@ function d1(file) {
   const db = new DatabaseSync(file);
   db.exec(fs.readFileSync(path.join(VIEW, 'schema.sql'), 'utf8'));
   // A database made by an older version gets the columns added since.
-  for (const [t, c] of [['projects', 'layout TEXT'], ['projects', 'design TEXT'], ['projects', 'costs TEXT'], ['projects', 'usage TEXT'], ['projects', 'county TEXT'], ['projects', 'connectors_off TEXT']]) if (!db.prepare(`PRAGMA table_info(${t})`).all().some((r) => r.name === c.split(' ')[0])) db.exec(`ALTER TABLE ${t} ADD COLUMN ${c}`);
+  for (const [t, c] of [['projects', 'layout TEXT'], ['projects', 'design TEXT'], ['projects', 'costs TEXT'], ['projects', 'usage TEXT'], ['projects', 'county TEXT'], ['projects', 'connectors_off TEXT'], ['projects', 'editors TEXT']]) if (!db.prepare(`PRAGMA table_info(${t})`).all().some((r) => r.name === c.split(' ')[0])) db.exec(`ALTER TABLE ${t} ADD COLUMN ${c}`);
   // Search rows made before they shared their code piece's rowid (server/answers.mjs removes them by rowid): rebuilt once.
   if (db.prepare('SELECT COUNT(*) AS n FROM code_fts f LEFT JOIN code_pieces p ON p.rowid = f.rowid AND p.path = f.path AND p.qname = f.qname WHERE p.rowid IS NULL').get().n) {
     db.exec('DELETE FROM code_fts; INSERT INTO code_fts (rowid, owner, project, path, qname, body) SELECT rowid, owner, project, path, qname, body FROM code_pieces;');
